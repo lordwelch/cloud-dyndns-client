@@ -74,6 +74,7 @@ func (i *IPAddressPoller) poll() error {
 	if err != nil {
 		return fmt.Errorf("could not obtain IP address: %w", err)
 	}
+	log.Printf("Found IP %v", ip)
 	for _, c := range i.channels {
 		select {
 		case c <- ip.String():

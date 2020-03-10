@@ -89,7 +89,7 @@ func NewSyncer(records []Record, pollInterval, apiTimeout time.Duration) *Syncer
 	}
 }
 
-// UpdateRecord() updates a managed record so that it can be synced by the
+// UpdateRecord updates a managed record so that it can be synced by the
 // sync loop.
 func (s *Syncer) UpdateRecord(dnsName, dnsType string, ttl int64, data []string) error {
 	for _, d := range s.domains {
@@ -109,10 +109,10 @@ func (s *Syncer) UpdateRecord(dnsName, dnsType string, ttl int64, data []string)
 		}
 	}
 
-	return fmt.Errorf("Domain %s not registered.", dnsName)
+	return fmt.Errorf("domain %s not registered.", dnsName)
 }
 
-// needsUpdate() compares the left/local DNSRecord against the right/remote
+// needsUpdate compares the left/local DNSRecord against the right/remote
 // DNSRecord and returns true if the record needs to be updated in the remote
 // backend.
 func needsUpdate(l, r backend.DNSRecord) bool {
@@ -135,7 +135,7 @@ func needsUpdate(l, r backend.DNSRecord) bool {
 	lData := l.Data()
 	rData := r.Data()
 
-	if len(lData) <= 0 {
+	if len(lData) < 1 {
 		return false
 	}
 
@@ -152,7 +152,7 @@ func needsUpdate(l, r backend.DNSRecord) bool {
 	return false
 }
 
-// pollSingle() performs a single refresh of the remote cache value.
+// pollSingle performs a single refresh of the remote cache value.
 func (s *Syncer) pollSingle(d *domainObj) error {
 	// Update record sets to reconcile
 	ctx := context.Background()
@@ -173,7 +173,7 @@ func (s *Syncer) pollSingle(d *domainObj) error {
 	return nil
 }
 
-// poll() runs a loop to poll the backend and update the remote cache.
+// poll runs a loop to poll the backend and update the remote cache.
 func (s *Syncer) poll(d *domainObj, stopCh <-chan struct{}) {
 	// Start by polling the domain to initialize the remote value and local cache
 	// TODO: Implement some exponential retry backoff logic in case poll interval is long
@@ -192,14 +192,14 @@ func (s *Syncer) poll(d *domainObj, stopCh <-chan struct{}) {
 	}
 }
 
-// syncSingle() syncs a single record entry, updating it with
+// syncSingle syncs a single record entry, updating it with
 // the backend server if necessary.
 func (s *Syncer) syncSingle(d *domainObj) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
 	// Sanity check
-	if !needsUpdate(d.managed, d.remote) {
+	if !needsUpdate(d.managed, d.remote) || len(d.managed.Data()) < 1 || len(d.managed.Data()) < 1 {
 		return nil
 	}
 
@@ -223,7 +223,7 @@ func (s *Syncer) syncSingle(d *domainObj) error {
 	return nil
 }
 
-// sync() runs a loop to sync records with backend providers
+// sync runs a loop to sync records with backend providers
 // when necessary.
 func (s *Syncer) sync(d *domainObj, stopCh <-chan struct{}) {
 	for {
@@ -246,7 +246,7 @@ func (s *Syncer) sync(d *domainObj, stopCh <-chan struct{}) {
 	}
 }
 
-// Run() starts the sync and poll loops
+// Run starts the sync and poll loops
 func (s *Syncer) Run(stopCh <-chan struct{}) error {
 	// Run a sync and poll loop for each domain. Sync and poll loops are
 	// separated so that polling and syncing do not block on each other.

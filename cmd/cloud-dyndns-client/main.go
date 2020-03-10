@@ -174,7 +174,7 @@ func main() {
 	records := []sync.Record{}
 	for name, d := range cfg.Domains {
 		if !strings.HasSuffix(name, ".") {
-			name = name + "."
+			name += "."
 		}
 		records = append(records, constructRecord(name, d)...)
 	}
@@ -196,6 +196,7 @@ func main() {
 	// TODO: Refactor and move this code to it's own package
 	wg.Go(func() error { return syncer.Run(ctx.Done()) })
 	wg.Go(func() error { return IP4Poller.Run(ctx.Done()) })
+	wg.Go(func() error { return IP6Poller.Run(ctx.Done()) })
 	wg.Go(func() error {
 		// This goroutine receives IP address polling results
 		// and updates the desired records in the Syncer.
@@ -204,6 +205,7 @@ func main() {
 		for {
 			select {
 			case ip := <-ip4c:
+				log.Printf("Updating IPv4: %v", ip)
 				for _, r := range records {
 					if r.Record.Type() == "A" {
 						syncer.UpdateRecord(
@@ -215,6 +217,7 @@ func main() {
 					}
 				}
 			case ip := <-ip6c:
+				log.Printf("Updating IPv6: %v", ip)
 				for _, r := range records {
 					if r.Record.Type() == "AAAA" {
 						syncer.UpdateRecord(
@@ -272,7 +275,7 @@ func main() {
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case s := <-signals:
-		log.Printf("Received signal %v, exiting...", s)
+		log.Printf("Received %v signal, exiting...", s)
 	case <-ctx.Done():
 	}
 	cancel()
