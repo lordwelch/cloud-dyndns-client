@@ -30,9 +30,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianlewis/cloud-dyndns-client/pkg/backend"
-	"github.com/ianlewis/cloud-dyndns-client/pkg/backend/gcp"
-	"github.com/ianlewis/cloud-dyndns-client/pkg/sync"
+	"github.com/lordwelch/cloud-dyndns-client/pkg/backend"
+	"github.com/lordwelch/cloud-dyndns-client/pkg/backend/gcp"
+	"github.com/lordwelch/cloud-dyndns-client/pkg/sync"
 )
 
 // VERSION is the current version of the application.
@@ -40,6 +40,8 @@ var VERSION = "0.1.5"
 
 // Domain is a single domain listed in the configuration file.
 type Domain struct {
+	IP4            bool                   `json:"ip4"`
+	IP6            bool                   `json:"ip6"`
 	Provider       string                 `json:"provider"`
 	ProviderConfig map[string]interface{} `json:"provider_config"`
 	Backend        backend.DNSBackend
@@ -112,6 +114,44 @@ func getConfig(pathToJSON string) (Config, error) {
 	return cfg, nil
 }
 
+func constructRecord(name string, d *Domain) []sync.Record {
+	var records []sync.Record
+	if d.IP4 {
+		records = append(records, sync.Record{
+			Record: backend.NewDNSRecord(
+				name,
+				"A",
+				600,
+				[]string{},
+			),
+			Backend: d.Backend,
+		})
+	}
+	if d.IP6 {
+		records = append(records, sync.Record{
+			Record: backend.NewDNSRecord(
+				name,
+				"AAAA",
+				600,
+				[]string{},
+			),
+			Backend: d.Backend,
+		})
+	}
+	if len(records) < 1 {
+		records = append(records, sync.Record{
+			Record: backend.NewDNSRecord(
+				name,
+				"A",
+				600,
+				[]string{},
+			),
+			Backend: d.Backend,
+		})
+	}
+	return records
+}
+
 // Main is the main function for the cloud-dyndns-client command. It returns the OS exit code.
 func main() {
 	addr := flag.String("addr", "", "Address to listen on for health checks.")
@@ -136,15 +176,7 @@ func main() {
 		if !strings.HasSuffix(name, ".") {
 			name = name + "."
 		}
-		records = append(records, sync.Record{
-			Record: backend.NewDNSRecord(
-				name,
-				"A",
-				600,
-				[]string{},
-			),
-			Backend: d.Backend,
-		})
+		records = append(records, constructRecord(name, d)...)
 	}
 
 	// Create a new syncer. This will sync DNS records to backends
@@ -153,7 +185,8 @@ func main() {
 
 	// The IP Address poller will poll for the Internet IP address.
 	// When a new address is polled the data will be forwarded to the syncer.
-	poller := sync.NewIPAddressPoller(5 * time.Minute)
+	IP4Poller := sync.NewIPAddressPoller(sync.IP4, 5*time.Minute, nil)
+	IP6Poller := sync.NewIPAddressPoller(sync.IP6, 5*time.Minute, nil)
 
 	// Create a waitgroup to manage the goroutines for the main loops.
 	// The waitgroup can be used to wait for goroutines to finish.
@@ -162,21 +195,35 @@ func main() {
 
 	// TODO: Refactor and move this code to it's own package
 	wg.Go(func() error { return syncer.Run(ctx.Done()) })
-	wg.Go(func() error { return poller.Run(ctx.Done()) })
+	wg.Go(func() error { return IP4Poller.Run(ctx.Done()) })
 	wg.Go(func() error {
 		// This goroutine receives IP address polling results
 		// and updates the desired records in the Syncer.
-		c := poller.Channel()
+		ip4c := IP4Poller.Channel()
+		ip6c := IP6Poller.Channel()
 		for {
 			select {
-			case ip := <-c:
+			case ip := <-ip4c:
 				for _, r := range records {
-					syncer.UpdateRecord(
-						r.Record.Name(),
-						r.Record.Type(),
-						r.Record.Ttl(),
-						[]string{ip},
-					)
+					if r.Record.Type() == "A" {
+						syncer.UpdateRecord(
+							r.Record.Name(),
+							r.Record.Type(),
+							r.Record.Ttl(),
+							[]string{ip},
+						)
+					}
+				}
+			case ip := <-ip6c:
+				for _, r := range records {
+					if r.Record.Type() == "AAAA" {
+						syncer.UpdateRecord(
+							r.Record.Name(),
+							r.Record.Type(),
+							r.Record.Ttl(),
+							[]string{ip},
+						)
+					}
 				}
 			case <-ctx.Done():
 				return nil

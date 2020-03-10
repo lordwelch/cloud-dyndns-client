@@ -57,6 +57,8 @@ Create a `config.json` for the client. Enter the domain name you want to update,
 {
   "domains": {
     "mydomain.example.com": {
+      "ip4": true,
+      "ip6": false,
       "provider": "gcp",
       "provider_config": {
          "project_id": "example-project",

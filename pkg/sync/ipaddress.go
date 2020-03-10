@@ -11,19 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package sync
 
 import (
-	"context"
 	"fmt"
 	"log"
-	"math/rand"
-	"net/http"
-	"strings"
 	"time"
 
-	"golang.org/x/net/html"
+	externalip "gitlab.com/vocdoni/go-external-ip"
+)
+
+type IPType uint
+
+const (
+	IP4 IPType = 4
+	IP6 IPType = 6
 )
 
 var webCheck = []string{
@@ -37,94 +39,72 @@ var webCheck = []string{
 type IPAddressPoller struct {
 	channels     []chan string
 	pollInterval time.Duration
+	consensus    *externalip.Consensus
+	iptype       IPType
 }
 
-func NewIPAddressPoller(pollInterval time.Duration) *IPAddressPoller {
+func NewIPAddressPoller(iptype IPType, pollInterval time.Duration, consensus *externalip.Consensus) *IPAddressPoller {
+	if consensus == nil {
+		return &IPAddressPoller{
+			pollInterval: pollInterval,
+			consensus:    externalip.DefaultConsensus(nil, nil),
+			iptype:       iptype,
+		}
+	}
 	return &IPAddressPoller{
 		pollInterval: pollInterval,
+		consensus:    consensus,
+		iptype:       iptype,
 	}
 }
 
-// Channel() returns a channel that receives data whenever an
+// Channel returns a channel that receives data whenever an
 // IP address value is received.
-func (p *IPAddressPoller) Channel() <-chan string {
+func (i *IPAddressPoller) Channel() <-chan string {
 	c := make(chan string, 1)
-	p.channels = append(p.channels, c)
+	i.channels = append(i.channels, c)
 	return c
 }
 
 // poll() runs a single polling event and retrieving the internet IP.
-func (p *IPAddressPoller) poll() error {
-	// Shuffle the list of URLs randomly so that they aren't
-	// always used in the same order.
-	urls := make([]string, len(webCheck))
-	copy(urls, webCheck)
-	for i := range urls {
-		j := rand.Intn(i + 1)
-		urls[i], urls[j] = urls[j], urls[i]
-	}
-
+func (i *IPAddressPoller) poll() error {
 	// Make a request to each url and send to the
-	// channels if an IP is retrieved
-	var lastErr error
-	for i := range urls {
-		ip, err := request(urls[i])
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		for _, c := range p.channels {
-			select {
-			case c <- ip:
-			default:
-			}
-		}
-		return nil
+	// channels if a consensus is achieved
+	ip, err := i.consensus.ExternalIP(uint(i.iptype))
+	if err != nil {
+		return fmt.Errorf("could not obtain IP address: %w", err)
 	}
-
-	return fmt.Errorf("Could not obtain IP address: %v", lastErr)
+	for _, c := range i.channels {
+		select {
+		case c <- ip.String():
+		default:
+		}
+	}
+	return nil
 }
 
 // request() makes a request to a URL to get the internet IP address.
-func request(url string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
+// func html_parser(url string) (string, error) {
+// 	z := html.NewTokenizer(resp.Body)
+// 	for {
+// 		tt := z.Next()
+// 		switch tt {
+// 		case html.ErrorToken:
+// 			return "", z.Err()
+// 		case html.TextToken:
+// 			text := strings.Trim(string(z.Text()), " \n\t")
+// 			if text != "" {
+// 				ip := ""
+// 				fmt.Sscanf(text, "Current IP Address: %s", &ip)
+// 				if ip != "" {
+// 					return strings.Trim(ip, " \n\t"), nil
+// 				}
+// 			}
+// 		}
+// 	}
+// }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req = req.WithContext(ctx)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Got status code from %q: %d", url, resp.StatusCode)
-	}
-
-	z := html.NewTokenizer(resp.Body)
-	for {
-		tt := z.Next()
-		switch tt {
-		case html.ErrorToken:
-			return "", z.Err()
-		case html.TextToken:
-			text := strings.Trim(string(z.Text()), " \n\t")
-			if text != "" {
-				ip := ""
-				fmt.Sscanf(text, "Current IP Address: %s", &ip)
-				if ip != "" {
-					return strings.Trim(ip, " \n\t"), nil
-				}
-			}
-		}
-	}
-}
-
-// Run() starts the main loop for the poller.
+// Run starts the main loop for the poller.
 func (i *IPAddressPoller) Run(stopCh <-chan struct{}) error {
 	if err := i.poll(); err != nil {
 		log.Printf("Error polling for IP: %v", err)
