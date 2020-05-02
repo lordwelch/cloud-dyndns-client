@@ -181,7 +181,7 @@ func main() {
 
 	// Create a new syncer. This will sync DNS records to backends
 	// and ensure records are set to the desired values.
-	syncer := sync.NewSyncer(records, 30*time.Second, 5*time.Second)
+	syncer := sync.NewSyncer(records, 5*time.Minute, 5*time.Second)
 
 	// The IP Address poller will poll for the Internet IP address.
 	// When a new address is polled the data will be forwarded to the syncer.
