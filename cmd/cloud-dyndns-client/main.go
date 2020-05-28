@@ -80,6 +80,7 @@ func getConfig(pathToJSON string) (Config, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("Could not load %s: %v", pathToJSON, err)
 	}
+	backends := make(map[string]backend.DNSBackend, len(cfg.Domains))
 
 	for _, d := range cfg.Domains {
 		if d.Provider == "gcp" {
@@ -101,9 +102,13 @@ func getConfig(pathToJSON string) (Config, error) {
 				return cfg, fmt.Errorf("\"managed_zone\" must be a string")
 			}
 
-			b, err := gcp.NewCloudDNSBackend(project, zone)
-			if err != nil {
-				return cfg, fmt.Errorf("Could not create Cloud DNS backend: %v", err)
+			b, ok := backends[project+"-"+zone]
+			if !ok {
+				b, err = gcp.NewCloudDNSBackend(project, zone)
+				if err != nil {
+					return cfg, fmt.Errorf("Could not create Cloud DNS backend: %v", err)
+				}
+				backends[project+"-"+zone] = b
 			}
 			d.Backend = b
 		} else {

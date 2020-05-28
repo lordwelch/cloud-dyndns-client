@@ -17,38 +17,32 @@ package gcp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
-	"golang.org/x/oauth2/google"
+	"golang.org/x/time/rate"
 	dns "google.golang.org/api/dns/v1"
 
 	"github.com/lordwelch/cloud-dyndns-client/pkg/backend"
 )
 
-var cloudDnsScopes = []string{
-	dns.CloudPlatformScope,
-	dns.CloudPlatformReadOnlyScope,
-	dns.NdevClouddnsReadonlyScope,
-	dns.NdevClouddnsReadwriteScope,
-}
-
 type cloudDNSRecord struct {
 	dns.ResourceRecordSet
 }
 
-func (c *cloudDNSRecord) Name() string {
+func (c cloudDNSRecord) Name() string {
 	return c.ResourceRecordSet.Name
 }
 
-func (c *cloudDNSRecord) Type() string {
+func (c cloudDNSRecord) Type() string {
 	return c.ResourceRecordSet.Type
 }
 
-func (c *cloudDNSRecord) Ttl() int64 {
+func (c cloudDNSRecord) Ttl() int64 {
 	return c.ResourceRecordSet.Ttl
 }
 
-func (c *cloudDNSRecord) Data() []string {
+func (c cloudDNSRecord) Data() []string {
 	return c.ResourceRecordSet.Rrdatas
 }
 
@@ -59,12 +53,15 @@ type cloudDNSBackend struct {
 	project string
 	zone    string
 	timeout time.Duration
+	limiter *rate.Limiter
+	cache   map[string]cloudDNSRecord
+	mutex   *sync.RWMutex
 }
 
 func NewCloudDNSBackend(project, zone string) (backend.DNSBackend, error) {
-	client, err := getDNSClient()
+	client, err := dns.NewService(context.Background())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Could not create Google Cloud DNS client: %v", err)
 	}
 
 	return &cloudDNSBackend{
@@ -72,29 +69,44 @@ func NewCloudDNSBackend(project, zone string) (backend.DNSBackend, error) {
 		project: project,
 		zone:    zone,
 		timeout: 5 * time.Second,
+		limiter: rate.NewLimiter(rate.Every(5*time.Second), 1),
+		cache:   make(map[string]cloudDNSRecord),
+		mutex:   &sync.RWMutex{},
 	}, nil
 }
 
 func (b *cloudDNSBackend) GetRecord(ctx context.Context, dnsName, dnsType string) (backend.DNSRecord, error) {
 	var record *dns.ResourceRecordSet
+	if !b.limiter.Allow() {
+		b.mutex.RLock()
+		record := b.cache[dnsName+"-"+dnsType]
+		b.mutex.RUnlock()
+		return record, nil
+	}
+	fmt.Println("run GetRecord")
+
+	b.mutex.Lock()
+	b.cache = make(map[string]cloudDNSRecord, len(b.cache))
 
 	call := b.client.ResourceRecordSets.List(b.project, b.zone)
 
 	err := call.Pages(ctx, func(page *dns.ResourceRecordSetsListResponse) error {
 		for _, v := range page.Rrsets {
+			if v == nil {
+				continue
+			}
 			if v.Name == dnsName && v.Type == dnsType {
 				record = v
 			}
+			b.cache[dnsName+"-"+dnsType] = cloudDNSRecord{*v}
 		}
 		return nil // NOTE: returning a non-nil error stops pagination.
 	})
+	b.mutex.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	if record == nil {
-		return nil, nil
-	}
-	return &cloudDNSRecord{*record}, nil
+	return cloudDNSRecord{*record}, nil
 }
 
 func (b *cloudDNSBackend) UpdateRecords(ctx context.Context, additions []backend.DNSRecord, deletions []backend.DNSRecord) error {
@@ -130,18 +142,4 @@ func (b *cloudDNSBackend) UpdateRecords(ctx context.Context, additions []backend
 	}
 
 	return nil
-}
-
-func getDNSClient() (*dns.Service, error) {
-	client, err := google.DefaultClient(context.Background(), cloudDnsScopes...)
-	if err != nil {
-		return nil, fmt.Errorf("Could not create Google Cloud DNS client: %v", err)
-	}
-
-	service, err := dns.New(client)
-	if err != nil {
-		return nil, fmt.Errorf("Could not create Google Cloud DNS client: %v", err)
-	}
-
-	return service, nil
 }
